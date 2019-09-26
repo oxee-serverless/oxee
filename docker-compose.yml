@@ -6,3 +6,4 @@ web:
   environment:
     - MINIO_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE
     - MINIO_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+    - TEST_VAR="Let's squanch!"
