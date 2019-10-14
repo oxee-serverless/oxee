@@ -1,75 +1,3 @@
-FROM alpine:3.10
-
-RUN apk add --no-cache \
-		ca-certificates
-
-# set up nsswitch.conf for Go's "netgo" implementation
-# - https://github.com/golang/go/blob/go1.9.1/src/net/conf.go#L194-L275
-# - docker run --rm debian:stretch grep '^hosts:' /etc/nsswitch.conf
-RUN [ ! -e /etc/nsswitch.conf ] && echo 'hosts: files dns' > /etc/nsswitch.conf
-
-ENV GOLANG_VERSION 1.13
-
-RUN set -eux; \
-	apk add --no-cache --virtual .build-deps \
-		bash \
-		gcc \
-		musl-dev \
-		openssl \
-		go \
-	; \
-	export \
-# set GOROOT_BOOTSTRAP such that we can actually build Go
-		GOROOT_BOOTSTRAP="$(go env GOROOT)" \
-# ... and set "cross-building" related vars to the installed system's values so that we create a build targeting the proper arch
-# (for example, if our build host is GOARCH=amd64, but our build env/image is GOARCH=386, our build needs GOARCH=386)
-		GOOS="$(go env GOOS)" \
-		GOARCH="$(go env GOARCH)" \
-		GOHOSTOS="$(go env GOHOSTOS)" \
-		GOHOSTARCH="$(go env GOHOSTARCH)" \
-	; \
-# also explicitly set GO386 and GOARM if appropriate
-# https://github.com/docker-library/golang/issues/184
-	apkArch="$(apk --print-arch)"; \
-	case "$apkArch" in \
-		armhf) export GOARM='6' ;; \
-		x86) export GO386='387' ;; \
-	esac; \
-	\
-	wget -O go.tgz "https://golang.org/dl/go$GOLANG_VERSION.src.tar.gz"; \
-	echo '3fc0b8b6101d42efd7da1da3029c0a13f22079c0c37ef9730209d8ec665bf122 *go.tgz' | sha256sum -c -; \
-	tar -C /usr/local -xzf go.tgz; \
-	rm go.tgz; \
-	\
-	cd /usr/local/go/src; \
-	./make.bash; \
-	\
-	rm -rf \
-# https://github.com/golang/go/blob/0b30cf534a03618162d3015c8705dd2231e34703/src/cmd/dist/buildtool.go#L121-L125
-		/usr/local/go/pkg/bootstrap \
-# https://golang.org/cl/82095
-# https://github.com/golang/build/blob/e3fe1605c30f6a3fd136b561569933312ede8782/cmd/release/releaselet.go#L56
-		/usr/local/go/pkg/obj \
-	; \
-	apk del .build-deps; \
-	\
-	export PATH="/usr/local/go/bin:$PATH"; \
-	go version
-
-ENV GOPATH /go
-ENV PATH $GOPATH/bin:/usr/local/go/bin:$PATH
-
-RUN mkdir -p "$GOPATH/src" "$GOPATH/bin" && chmod -R 777 "$GOPATH"
-WORKDIR $GOPATH
-
-ENV GOPATH /go
-ENV CGO_ENABLED 0
-ENV GO111MODULE on
-
-RUN  \
-     apk add --no-cache git && \
-     git clone https://github.com/minio/minio
-
 FROM alpine:3.9
 
 LABEL maintainer="MinIO Inc <dev@min.io>"
@@ -88,141 +16,203 @@ RUN \
      chmod +x /usr/bin/minio  && \
      chmod +x /usr/bin/docker-entrypoint.sh
 
-EXPOSE 9000
-
 ENTRYPOINT ["/usr/bin/docker-entrypoint.sh"]
 
 # VOLUME ["/data"]
 
-HEALTHCHECK --interval=1m CMD healthcheck
+ARG RESTY_IMAGE_BASE="alpine"
+ARG RESTY_IMAGE_TAG="3.9"
+ARG RESTY_VERSION="1.15.8.2"
+ARG RESTY_OPENSSL_VERSION="1.1.1c"
+ARG RESTY_PCRE_VERSION="8.43"
+ARG RESTY_J="1"
+ARG RESTY_CONFIG_OPTIONS="\
+    --with-compat \
+    --with-file-aio \
+    --with-http_addition_module \
+    --with-http_auth_request_module \
+    --with-http_dav_module \
+    --with-http_flv_module \
+    --with-http_geoip_module=dynamic \
+    --with-http_gunzip_module \
+    --with-http_gzip_static_module \
+    --with-http_image_filter_module=dynamic \
+    --with-http_mp4_module \
+    --with-http_random_index_module \
+    --with-http_realip_module \
+    --with-http_secure_link_module \
+    --with-http_slice_module \
+    --with-http_ssl_module \
+    --with-http_stub_status_module \
+    --with-http_sub_module \
+    --with-http_v2_module \
+    --with-http_xslt_module=dynamic \
+    --with-ipv6 \
+    --with-mail \
+    --with-mail_ssl_module \
+    --with-md5-asm \
+    --with-pcre-jit \
+    --with-sha1-asm \
+    --with-stream \
+    --with-stream_ssl_module \
+    --with-threads \
+    "
+ARG RESTY_CONFIG_OPTIONS_MORE=""
+ARG RESTY_LUAJIT_OPTIONS="--with-luajit-xcflags='-DLUAJIT_NUMMODE=2 -DLUAJIT_ENABLE_LUA52COMPAT'"
 
-ENV NGINX_VERSION 1.14.2
-# ENV NJS_VERSION   0.3.1
-ENV PKG_RELEASE 1
+ARG RESTY_ADD_PACKAGE_BUILDDEPS=""
+ARG RESTY_ADD_PACKAGE_RUNDEPS=""
+ARG RESTY_EVAL_PRE_CONFIGURE=""
+ARG RESTY_EVAL_POST_MAKE=""
 
-RUN set -x \
-    && apkArch="$(cat /etc/apk/arch)" \
-    && nginxPackages=" \
-        nginx=${NGINX_VERSION}-r${PKG_RELEASE} " \
-    #     nginx-module-xslt=${NGINX_VERSION}-r${PKG_RELEASE} \
-    #     nginx-module-geoip=${NGINX_VERSION}-r${PKG_RELEASE} \
-    #     nginx-module-image-filter=${NGINX_VERSION}-r${PKG_RELEASE} \
-    #     nginx-module-njs=${NGINX_VERSION}.${NJS_VERSION}-r${PKG_RELEASE} \
-    # " \
-    && case "$apkArch" in \
-        x86_64) \
-# arches officially built by upstream
-            set -x \
-            && KEY_SHA512="e7fa8303923d9b95db37a77ad46c68fd4755ff935d0a534d26eba83de193c76166c68bfe7f65471bf8881004ef4aa6df3e34689c305662750c0172fca5d8552a *stdin" \
-            && apk add --no-cache --virtual .cert-deps \
-                openssl curl ca-certificates \
-            && curl -o /tmp/nginx_signing.rsa.pub https://nginx.org/keys/nginx_signing.rsa.pub \
-            && if [ "$(openssl rsa -pubin -in /tmp/nginx_signing.rsa.pub -text -noout | openssl sha512 -r)" = "$KEY_SHA512" ]; then \
-                 echo "key verification succeeded!"; \
-                 mv /tmp/nginx_signing.rsa.pub /etc/apk/keys/; \
-               else \
-                 echo "key verification failed!"; \
-                 exit 1; \
-               fi \
-            && printf "%s%s%s\n" \
-                "http://nginx.org/packages/alpine/v" \
-                `egrep -o '^[0-9]+\.[0-9]+' /etc/alpine-release` \
-                "/main" \
-            | tee -a /etc/apk/repositories \
-            && apk del .cert-deps \
-            ;; \
-        *) \
-# we're on an architecture upstream doesn't officially build for
-# let's build binaries from the published packaging sources
-            set -x \
-            && tempDir="$(mktemp -d)" \
-            && chown nobody:nobody $tempDir \
-            && apk add --no-cache --virtual .build-deps \
-                gcc \
-                libc-dev \
-                make \
-                openssl-dev \
-                pcre-dev \
-                zlib-dev \
-                linux-headers \
-                libxslt-dev \
-                gd-dev \
-                geoip-dev \
-                perl-dev \
-                libedit-dev \
-                mercurial \
-                bash \
-                alpine-sdk \
-                findutils \
-            && su - nobody -s /bin/sh -c " \
-                export HOME=${tempDir} \
-                && cd ${tempDir} \
-                && hg clone https://hg.nginx.org/pkg-oss \
-                && cd pkg-oss \
-                && hg up ${NGINX_VERSION}-${PKG_RELEASE} \
-                && cd alpine \
-                && make all \
-                && apk index -o ${tempDir}/packages/alpine/${apkArch}/APKINDEX.tar.gz ${tempDir}/packages/alpine/${apkArch}/*.apk \
-                && abuild-sign -k ${tempDir}/.abuild/abuild-key.rsa ${tempDir}/packages/alpine/${apkArch}/APKINDEX.tar.gz \
-                " \
-            && echo "${tempDir}/packages/alpine/" >> /etc/apk/repositories \
-            && cp ${tempDir}/.abuild/abuild-key.rsa.pub /etc/apk/keys/ \
-            && apk del .build-deps \
-            ;; \
-    esac \
-    && apk add --no-cache $nginxPackages \
-# if we have leftovers from building, let's purge them (including extra, unnecessary build deps)
-    && if [ -n "$tempDir" ]; then rm -rf "$tempDir"; fi \
-    && if [ -n "/etc/apk/keys/abuild-key.rsa.pub" ]; then rm -f /etc/apk/keys/abuild-key.rsa.pub; fi \
-    && if [ -n "/etc/apk/keys/nginx_signing.rsa.pub" ]; then rm -f /etc/apk/keys/nginx_signing.rsa.pub; fi \
-# remove the last line with the packages repos in the repositories file
-    && sed -i '$ d' /etc/apk/repositories \
-# Bring in gettext so we can get `envsubst`, then throw
-# the rest away. To do this, we need to install `gettext`
-# then move `envsubst` out of the way so `gettext` can
-# be deleted completely, then move `envsubst` back.
-    && apk add --no-cache --virtual .gettext gettext \
-    && mv /usr/bin/envsubst /tmp/ \
-    \
-    && runDeps="$( \
-        scanelf --needed --nobanner /tmp/envsubst \
-            | awk '{ gsub(/,/, "\nso:", $2); print "so:" $2 }' \
-            | sort -u \
-            | xargs -r apk info --installed \
-            | sort -u \
-    )" \
-    && apk add --no-cache $runDeps \
-    && apk del .gettext \
-    && mv /tmp/envsubst /usr/local/bin/ \
-# Bring in tzdata so users could set the timezones through the environment
-# variables
-    && apk add --no-cache tzdata \
-# forward request and error logs to docker log collector
-    && ln -sf /dev/stdout /var/log/nginx/access.log \
-    && ln -sf /dev/stderr /var/log/nginx/error.log
+# These are not intended to be user-specified
+ARG _RESTY_CONFIG_DEPS="--with-pcre \
+    --with-cc-opt='-DNGX_LUA_ABORT_AT_PANIC -I/usr/local/openresty/pcre/include -I/usr/local/openresty/openssl/include' \
+    --with-ld-opt='-L/usr/local/openresty/pcre/lib -L/usr/local/openresty/openssl/lib -Wl,-rpath,/usr/local/openresty/pcre/lib:/usr/local/openresty/openssl/lib' \
+    "
 
-EXPOSE 80
-# EXPOSE 443
+LABEL resty_image_base="${RESTY_IMAGE_BASE}"
+LABEL resty_image_tag="${RESTY_IMAGE_TAG}"
+LABEL resty_version="${RESTY_VERSION}"
+LABEL resty_openssl_version="${RESTY_OPENSSL_VERSION}"
+LABEL resty_pcre_version="${RESTY_PCRE_VERSION}"
+LABEL resty_config_options="${RESTY_CONFIG_OPTIONS}"
+LABEL resty_config_options_more="${RESTY_CONFIG_OPTIONS_MORE}"
+LABEL resty_config_deps="${_RESTY_CONFIG_DEPS}"
+LABEL resty_add_package_builddeps="${RESTY_ADD_PACKAGE_BUILDDEPS}"
+LABEL resty_add_package_rundeps="${RESTY_ADD_PACKAGE_RUNDEPS}"
+LABEL resty_eval_pre_configure="${RESTY_EVAL_PRE_CONFIGURE}"
+LABEL resty_eval_post_make="${RESTY_EVAL_POST_MAKE}"
 
-STOPSIGNAL SIGTERM
+# 1) Install apk dependencies
+# 2) Download and untar OpenSSL, PCRE, and OpenResty
+# 3) Build OpenResty
+# 4) Cleanup
+
+RUN apk add --no-cache --virtual .build-deps \
+        build-base \
+        coreutils \
+        curl \
+        gd-dev \
+        geoip-dev \
+        libxslt-dev \
+        linux-headers \
+        make \
+        perl-dev \
+        readline-dev \
+        zlib-dev \
+        ${RESTY_ADD_PACKAGE_BUILDDEPS} \
+    && apk add --no-cache \
+        gd \
+        geoip \
+        libgcc \
+        libxslt \
+        zlib \
+        ${RESTY_ADD_PACKAGE_RUNDEPS} \
+    && cd /tmp \
+    && if [ -n "${RESTY_EVAL_PRE_CONFIGURE}" ]; then eval $(echo ${RESTY_EVAL_PRE_CONFIGURE}); fi \
+    && cd /tmp \
+    && curl -fSL https://www.openssl.org/source/openssl-${RESTY_OPENSSL_VERSION}.tar.gz -o openssl-${RESTY_OPENSSL_VERSION}.tar.gz \
+    && tar xzf openssl-${RESTY_OPENSSL_VERSION}.tar.gz \
+    && cd openssl-${RESTY_OPENSSL_VERSION} \
+    && if [ $(echo ${RESTY_OPENSSL_VERSION} | cut -c 1-5) = "1.1.1" ] ; then \
+        echo 'patching OpenSSL 1.1.1 for OpenResty' \
+        && curl -s https://raw.githubusercontent.com/openresty/openresty/master/patches/openssl-1.1.1c-sess_set_get_cb_yield.patch | patch -p1 ; \
+    fi \
+    && if [ $(echo ${RESTY_OPENSSL_VERSION} | cut -c 1-5) = "1.1.0" ] ; then \
+        echo 'patching OpenSSL 1.1.0 for OpenResty' \
+        && curl -s https://raw.githubusercontent.com/openresty/openresty/ed328977028c3ec3033bc25873ee360056e247cd/patches/openssl-1.1.0j-parallel_build_fix.patch | patch -p1 \
+        && curl -s https://raw.githubusercontent.com/openresty/openresty/master/patches/openssl-1.1.0d-sess_set_get_cb_yield.patch | patch -p1 ; \
+    fi \
+    && ./config \
+      no-threads shared zlib -g \
+      enable-ssl3 enable-ssl3-method \
+      --prefix=/usr/local/openresty/openssl \
+      --libdir=lib \
+      -Wl,-rpath,/usr/local/openresty/openssl/lib \
+    && make -j${RESTY_J} \
+    && make -j${RESTY_J} install_sw \
+    && cd /tmp \
+    && curl -fSL https://ftp.pcre.org/pub/pcre/pcre-${RESTY_PCRE_VERSION}.tar.gz -o pcre-${RESTY_PCRE_VERSION}.tar.gz \
+    && tar xzf pcre-${RESTY_PCRE_VERSION}.tar.gz \
+    && cd /tmp/pcre-${RESTY_PCRE_VERSION} \
+    && ./configure \
+        --prefix=/usr/local/openresty/pcre \
+        --disable-cpp \
+        --enable-jit \
+        --enable-utf \
+        --enable-unicode-properties \
+    && make -j${RESTY_J} \
+    && make -j${RESTY_J} install \
+    && cd /tmp \
+    && curl -fSL https://github.com/openresty/openresty/releases/download/v${RESTY_VERSION}/openresty-${RESTY_VERSION}.tar.gz -o openresty-${RESTY_VERSION}.tar.gz \
+    && tar xzf openresty-${RESTY_VERSION}.tar.gz \
+    && cd /tmp/openresty-${RESTY_VERSION} \
+    && eval ./configure -j${RESTY_J} ${_RESTY_CONFIG_DEPS} ${RESTY_CONFIG_OPTIONS} ${RESTY_CONFIG_OPTIONS_MORE} ${RESTY_LUAJIT_OPTIONS} \
+    && make -j${RESTY_J} \
+    && make -j${RESTY_J} install \
+    && cd /tmp \
+    && if [ -n "${RESTY_EVAL_POST_MAKE}" ]; then eval $(echo ${RESTY_EVAL_POST_MAKE}); fi \
+    && rm -rf \
+        openssl-${RESTY_OPENSSL_VERSION}.tar.gz openssl-${RESTY_OPENSSL_VERSION} \
+        pcre-${RESTY_PCRE_VERSION}.tar.gz pcre-${RESTY_PCRE_VERSION} \
+        openresty-${RESTY_VERSION}.tar.gz openresty-${RESTY_VERSION} \
+    && apk del .build-deps \
+    && ln -sf /dev/stdout /usr/local/openresty/nginx/logs/access.log \
+    && ln -sf /dev/stderr /usr/local/openresty/nginx/logs/error.log
+
+# Add additional binaries into PATH for convenience
+ENV PATH=$PATH:/usr/local/openresty/luajit/bin:/usr/local/openresty/nginx/sbin:/usr/local/openresty/bin
 
 RUN apk add --no-cache \
-		bash \
-        openssl
+    bash \
+    socat \
+    openssl
+
+RUN openssl dhparam -out /etc/ssl/certs/dhparam.pem 2048
 
 RUN mkdir -p /run/nginx
-RUN mkdir -p /data/site
+RUN mkdir -p /run/certmon
+RUN mkdir -p /data/localhost/world
 
-# RUN curl https://get.acme.sh | sh
+RUN touch /run/certmon/cert.domain
+RUN chmod 777 /run/certmon/cert.domain
 
-# COPY dockerscripts/certs/certificate.key /etc/ssl/certs/
-# COPY dockerscripts/certs/fullchain.crt /etc/ssl/certs/
-# RUN openssl dhparam -out /etc/ssl/certs/dhparam.pem 2048
+RUN curl https://get.acme.sh | sh
+RUN ln -s /root/.acme.sh/acme.sh /usr/local/bin/acme.sh
 
-RUN rm /etc/nginx/conf.d/default.conf
+COPY dockerscripts/nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
 COPY dockerscripts/default.conf /etc/nginx/conf.d/
 
-RUN echo "This site is under maintenance and will be back online shortly..." > /data/site/index.html
+COPY dockerscripts/certmon.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/certmon.sh
 
-CMD nginx && minio server /data
+COPY dockerscripts/certfallback.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/certfallback.sh
+
+RUN echo "This site is under maintenance and will be back online shortly..." > /data/localhost/index.html
+RUN echo "Hello world" > /data/localhost/hello.html
+RUN echo "Hello inner world" > /data/localhost/world/index.html
+
+# HTTP and HTTPS Ports
+EXPOSE 80
+EXPOSE 443
+
+# Certify Port
+EXPOSE 8000
+
+# MinIO Port
+EXPOSE 9000
+
+RUN apk add --no-cache openssh-server
+RUN mkdir /var/run/sshd
+RUN openssl rand -base64 32 > /root/.pass
+RUN echo "root:$(cat /root/.pass)" | chpasswd
+RUN echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config
+RUN /usr/bin/ssh-keygen -A
+EXPOSE 22
+
+CMD /bin/bash -c "cat /root/.pass && /usr/local/bin/certfallback.sh && /usr/local/openresty/bin/openresty && /usr/local/bin/certmon.sh start && /usr/sbin/sshd && minio server /data"
 # CMD tail -f /dev/null
+
+STOPSIGNAL SIGTERM
