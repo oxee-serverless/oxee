@@ -206,14 +206,34 @@ EXPOSE 8000
 EXPOSE 9000
 
 # Setup SSHd to be able to ssh into server
-RUN apk add --no-cache openssh-server
-RUN mkdir /var/run/sshd
+RUN apk add --no-cache openssh-server openssh-client
+RUN mkdir -p /var/run/sshd
 RUN openssl rand -base64 32 > /root/.pass
 RUN echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config
 RUN /usr/bin/ssh-keygen -A
 EXPOSE 22
 
-CMD /bin/bash -c "echo \"root:$(cat /root/.pass)\" | chpasswd && cat /root/.pass && /usr/local/bin/certfallback.sh && /usr/local/openresty/bin/openresty && /usr/local/bin/certmon.sh start && /usr/sbin/sshd && minio server /data"
+# Setup Health Check
+RUN apk add --no-cache lighttpd
+RUN mkdir -p /var/www/health_check
+RUN echo $'# No trailing empty line\n\
+server.document-root = "/var/www/health_check"\n\
+server.port = 88\n\
+index-file.names = ( "index.html" )\n\
+mimetype.assign = ( ".html" => "text/html" )\n\
+' > /etc/lighttpd/lighttpd.conf
+RUN echo 'I am alive!' > /var/www/health_check/index.html
+RUN chmod 775 -R /var/www/health_check
+EXPOSE 88
+
+# Start all the things!
+CMD /bin/bash -c "lighttpd -f /etc/lighttpd/lighttpd.conf && \
+echo \"root:$(cat /root/.pass)\" | chpasswd && \
+cat /root/.pass && \
+/usr/local/bin/certfallback.sh && \
+/usr/local/openresty/bin/openresty && \
+/usr/local/bin/certmon.sh start && \
+/usr/sbin/sshd && minio server /data"
 # CMD tail -f /dev/null
 
 STOPSIGNAL SIGTERM
