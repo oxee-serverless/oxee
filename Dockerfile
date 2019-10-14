@@ -167,7 +167,8 @@ ENV PATH=$PATH:/usr/local/openresty/luajit/bin:/usr/local/openresty/nginx/sbin:/
 RUN apk add --no-cache \
     bash \
     socat \
-    openssl
+    openssl \
+    mini_httpd
 
 RUN openssl dhparam -out /etc/ssl/certs/dhparam.pem 2048
 
@@ -204,15 +205,15 @@ EXPOSE 8000
 # MinIO Port
 EXPOSE 9000
 
+# Setup SSHd to be able to ssh into server
 RUN apk add --no-cache openssh-server
 RUN mkdir /var/run/sshd
 RUN openssl rand -base64 32 > /root/.pass
-RUN echo "root:$(cat /root/.pass)" | chpasswd
 RUN echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config
 RUN /usr/bin/ssh-keygen -A
 EXPOSE 22
 
-CMD /bin/bash -c "cat /root/.pass && /usr/local/bin/certfallback.sh && /usr/local/openresty/bin/openresty && /usr/local/bin/certmon.sh start && /usr/sbin/sshd && minio server /data"
+CMD /bin/bash -c "echo \"root:$(cat /root/.pass)\" | chpasswd && cat /root/.pass && /usr/local/bin/certfallback.sh && /usr/local/openresty/bin/openresty && /usr/local/bin/certmon.sh start && /usr/sbin/sshd && minio server /data"
 # CMD tail -f /dev/null
 
 STOPSIGNAL SIGTERM
