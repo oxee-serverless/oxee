@@ -1,0 +1,11 @@
+web:
+  image: oxee:latest
+  ports:
+    - "8080:80"
+    - "8888:88"
+    - "4430:443"
+    - "9000:9000"
+    - "2504:22"
+  environment:
+    - MINIO_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE
+    - MINIO_SECRET_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY

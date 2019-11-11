@@ -1,0 +1,27 @@
+{
+  "name": "oxee-admin",
+  "version": "0.0.1",
+  "description": "Serverless admin API for Oxee framework",
+  "main": "handler.js",
+  "author": "Jean M. Lescure",
+  "license": "MIT",
+  "devDependencies": {
+    "@babel/core": "^7.7.2",
+    "@babel/plugin-proposal-class-properties": "^7.7.0",
+    "@babel/plugin-transform-runtime": "^7.6.2",
+    "@babel/preset-env": "^7.7.1",
+    "@babel/runtime": "^7.7.2",
+    "babel-loader": "^8.0.6",
+    "babel-plugin-source-map-support": "^2.1.1",
+    "serverless-offline": "^5.12.0",
+    "serverless-webpack": "^5.3.1",
+    "webpack": "^4.41.2"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.568.0",
+    "json-parse-better-errors": "^1.0.2",
+    "path-to-regexp": "^3.1.0",
+    "qs": "^6.9.1",
+    "source-map-support": "^0.5.16"
+  }
+}

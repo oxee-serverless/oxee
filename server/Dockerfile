@@ -2,7 +2,7 @@ FROM alpine:3.9
 
 LABEL maintainer="MinIO Inc <dev@min.io>"
 
-COPY dockerscripts/docker-entrypoint.sh /usr/bin/
+COPY ../dockerscripts/docker-entrypoint.sh /usr/bin/
 
 ENV MINIO_UPDATE off
 ENV MINIO_ACCESS_KEY_FILE=access_key \
@@ -182,13 +182,13 @@ RUN chmod 777 /run/certmon/cert.domain
 RUN curl https://get.acme.sh | sh
 RUN ln -s /root/.acme.sh/acme.sh /usr/local/bin/acme.sh
 
-COPY dockerscripts/nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
-COPY dockerscripts/default.conf /etc/nginx/conf.d/
+COPY ../dockerscripts/nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
+COPY ../dockerscripts/default.conf /etc/nginx/conf.d/
 
-COPY dockerscripts/certmon.sh /usr/local/bin/
+COPY ../dockerscripts/certmon.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/certmon.sh
 
-COPY dockerscripts/certfallback.sh /usr/local/bin/
+COPY ../dockerscripts/certfallback.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/certfallback.sh
 
 RUN echo "This site is under maintenance and will be back online shortly..." > /data/localhost/index.html
